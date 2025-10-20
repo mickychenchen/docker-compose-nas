@@ -14,6 +14,7 @@ docker-compose.override.yml
 /pia
 /pia-shared
 /letsencrypt
+/jellyfin
 /jellyseerr
 /adguardhome/certs
 /adguardhome/conf
@@ -23,3 +24,4 @@ docker-compose.override.yml
 /cleanuparr/*
 !/cleanuparr/blacklist.json
 !/cleanuparr/logs/.gitkeep
+/rclone/rclone.conf

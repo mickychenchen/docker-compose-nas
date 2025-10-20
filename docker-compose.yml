@@ -65,6 +65,9 @@ services:
       - homepage.widget.type=sonarr
       - homepage.widget.url=http://sonarr:8989/sonarr
       - homepage.widget.key=${SONARR_API_KEY}
+    depends_on:
+      rclone-mount:
+        condition: service_healthy
   radarr:
     image: lscr.io/linuxserver/radarr
     container_name: radarr
@@ -95,6 +98,42 @@ services:
       - homepage.widget.type=radarr
       - homepage.widget.url=http://radarr:7878/radarr
       - homepage.widget.key=${RADARR_API_KEY}
+    depends_on:
+      rclone-mount:
+        condition: service_healthy
+  radarr4k:
+    image: lscr.io/linuxserver/radarr
+    container_name: radarr4k
+    environment:
+      - PUID=${USER_ID}
+      - PGID=${GROUP_ID}
+      - TZ=${TIMEZONE}
+    volumes:
+      - ${CONFIG_ROOT:-.}/radarr4k:/config
+      - ${DATA_ROOT}:/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:7878/radarr4k/ping"]
+      interval: 1m
+      retries: 10
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.radarr4k.rule=(Host(`${HOSTNAME}`) && PathPrefix(`/radarr4k`))
+      - traefik.http.routers.radarr4k.tls=true
+      - traefik.http.routers.radarr4k.tls.certresolver=myresolver
+      - traefik.http.services.radarr4k.loadbalancer.server.port=7878
+      - homepage.group=Media
+      - homepage.name=Radarr 4K
+      - homepage.icon=radarr.png
+      - homepage.href=/radarr4k
+      - homepage.description=4K Movies management
+      - homepage.weight=2
+      - homepage.widget.type=radarr
+      - homepage.widget.url=http://radarr4k:7878/radarr4k
+      - homepage.widget.key=${RADARR4K_API_KEY}
+    depends_on:
+      rclone-mount:
+        condition: service_healthy
   lidarr:
     image: lscr.io/linuxserver/lidarr
     container_name: lidarr
@@ -157,6 +196,9 @@ services:
       - homepage.widget.type=bazarr
       - homepage.widget.url=http://bazarr:6767/bazarr
       - homepage.widget.key=${BAZARR_API_KEY}
+    depends_on:
+      rclone-mount:
+        condition: service_healthy
   jellyseerr:
     image: ghcr.io/fallenbagel/jellyseerr:latest
     container_name: jellyseerr
@@ -286,33 +328,41 @@ services:
       - homepage.widget.username=${QBITTORRENT_USERNAME}
       - homepage.widget.password=${QBITTORRENT_PASSWORD}
   vpn:
-    image: ghcr.io/thrnz/docker-wireguard-pia:latest
+    image: qmcgaw/gluetun
     container_name: vpn
-    volumes:
-      - ${CONFIG_ROOT:-.}/pia:/pia
-      - ${CONFIG_ROOT:-.}/pia-shared:/pia-shared
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
-      - LOC=${PIA_LOCATION}
-      - USER=${PIA_USER}
-      - PASS=${PIA_PASS}
-      - QBT_USER=${QBITTORRENT_USERNAME}
-      - QBT_PASS=${QBITTORRENT_PASSWORD}
-      - LOCAL_NETWORK=${PIA_LOCAL_NETWORK}
-      - PORT_FORWARDING=1
-      - PORT_PERSIST=1
-      - PORT_SCRIPT=/pia-shared/portupdate-qbittorrent.sh
-      - FIREWALL=0
-      - ACTIVE_HEALTHCHECKS=1
-      - RECONNECT=1
+      - VPN_SERVICE_PROVIDER=nordvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${NORD_PRIVATE_KEY}
+      - SERVER_COUNTRIES=${VPN_SERVER_COUNTRY}
+      - FIREWALL_LAN_INPUT=yes
+      - FIREWALL_VPN_INPUT_PORTS=8080,6881
+      - PUID=${USER_ID}
+      - PGID=${GROUP_ID}
+      - TZ=${TIMEZONE}
+      - DOT=off
+      - DNS_ADDRESS=1.1.1.1
+    volumes:
+      - ${CONFIG_ROOT:-.}/gluetun:/gluetun
+    restart: always
+    healthcheck:
+      test: ["CMD", "ping", "-c", "1", "1.1.1.1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    ports:
+      - 8080:8080
+      - 6881:6881
+      - 6881:6881/udp
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
       - net.ipv6.conf.default.disable_ipv6=1
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.lo.disable_ipv6=1
-    restart: always
   unpackerr:
     image: ghcr.io/unpackerr/unpackerr:latest
     container_name: unpackerr
@@ -358,6 +408,10 @@ services:
       - RADARR__BLOCK__PATH=/usr/blacklist.json
       - RADARR__INSTANCES__0__URL=http://radarr:7878/radarr
       - RADARR__INSTANCES__0__APIKEY=${RADARR_API_KEY}
+      - RADARR4K__ENABLED=true
+      - RADARR4K__BLOCK__PATH=/usr/blacklist.json
+      - RADARR4K__INSTANCES__0__URL=http://radarr4k:7878/radarr4k
+      - RADARR4K__INSTANCES__0__APIKEY=${RADARR4K_API_KEY}
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
     container_name: sabnzbd
@@ -397,6 +451,10 @@ services:
     volumes:
       - ${CONFIG_ROOT:-.}/jellyfin:/config
       - ${DATA_ROOT}:/data
+      - ./jellyfin/web/assets/img/banner-light.png:/usr/share/jellyfin/web/assets/img/banner-light.png
+      - ./jellyfin/web/slideshowpure.js:/usr/share/jellyfin/web/slideshowpure.js
+      - ./jellyfin/web/avatars/list.txt:/usr/share/jellyfin/web/avatars/list.txt
+      - ./jellyfin/custom-cont-init.d:/custom-cont-init.d:ro
     ports:
       - "7359:7359/udp"
       - "1900:1900/udp"
@@ -420,6 +478,9 @@ services:
       - homepage.widget.type=jellyfin
       - homepage.widget.url=http://jellyfin:8096/jellyfin
       - homepage.widget.key=${JELLYFIN_API_KEY}
+    depends_on:
+      rclone-mount:
+        condition: service_healthy
   calibre-web:
     image: lscr.io/linuxserver/calibre-web:latest
     container_name: calibre-web
@@ -517,6 +578,11 @@ services:
       - traefik.http.routers.homepage.tls=true
       - traefik.http.routers.homepage.tls.certresolver=myresolver
       - traefik.http.services.homepage.loadbalancer.server.port=3000
+    depends_on:
+      rclone-mount:
+        condition: service_healthy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
   watchtower:
     image: ghcr.io/containrrr/watchtower:latest
     container_name: watchtower

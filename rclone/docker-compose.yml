@@ -1,0 +1,82 @@
+services:
+  rclone:
+    image: rclone/rclone:latest
+    container_name: rclone
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    environment:
+      - PUID=${USER_ID}
+      - PGID=${GROUP_ID}
+      - TZ=${TIMEZONE}
+    volumes:
+      - ${CONFIG_ROOT:-.}/rclone/cache:/data/vfs_cache
+      - ${CONFIG_ROOT:-.}/rclone:/config/rclone
+      - ${DATA_ROOT}/media:/data/onedrive:shared
+      - ${DATA_ROOT}/backups:/backups:shared
+    command: rcd
+    profiles:
+      - rclone
+
+  rclone-mount:
+    image: rclone/rclone:latest
+    container_name: rclone-mount
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    security_opt:
+      - apparmor:unconfined
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    environment:
+      - PUID=${USER_ID}
+      - PGID=${GROUP_ID}
+      - TZ=${TIMEZONE}
+    volumes:
+      - ${CONFIG_ROOT:-.}/rclone/cache:/data/vfs_cache
+      - ${CONFIG_ROOT:-.}/rclone:/config/rclone
+      - ${DATA_ROOT}/media:/data/onedrive:shared
+      - ${DATA_ROOT}/backups:/backups:shared
+    command: >
+      mount union-crypt: /data/onedrive
+      --allow-other
+      --vfs-cache-mode full
+      --cache-dir /data/vfs_cache
+      --allow-non-empty
+      --vfs-cache-max-size 30G
+      --dir-cache-time 24h
+      --vfs-cache-max-age 24h
+      --poll-interval 1m
+      --buffer-size 1G
+      --vfs-read-ahead 2G
+      --vfs-read-chunk-size 32M
+      --vfs-read-chunk-size-limit 512M
+      --log-level INFO
+      --user-agent 'Jellyfin'
+      --rc
+      --rc-web-gui
+      --rc-addr :5572
+      --rc-user ${RCLONE_USER}
+      --rc-pass ${RCLONE_PASS}
+    healthcheck:
+      test: ["CMD", "mountpoint", "-q", "/data/onedrive"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.rclone-mount.rule=(Host(`${RCLONE_HOSTNAME}`))
+      - traefik.http.routers.rclone-mount.tls=true
+      - traefik.http.routers.rclone-mount.tls.certresolver=myresolver
+      - traefik.http.services.rclone-mount.loadbalancer.server.port=5572
+      - homepage.group=Sync
+      - homepage.name=Rclone
+      - homepage.icon=rclone.png
+      - homepage.href=https://${RCLONE_HOSTNAME}
+      - homepage.description=Rclone GUI
+    profiles:
+      - rclone
