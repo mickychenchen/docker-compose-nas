@@ -451,10 +451,6 @@ services:
     volumes:
       - ${CONFIG_ROOT:-.}/jellyfin:/config
       - ${DATA_ROOT}:/data
-      - ./jellyfin/web/assets/img/banner-light.png:/usr/share/jellyfin/web/assets/img/banner-light.png
-      - ./jellyfin/web/slideshowpure.js:/usr/share/jellyfin/web/slideshowpure.js
-      - ./jellyfin/web/avatars/list.txt:/usr/share/jellyfin/web/avatars/list.txt
-      - ./jellyfin/custom-cont-init.d:/custom-cont-init.d:ro
     ports:
       - "7359:7359/udp"
       - "1900:1900/udp"
