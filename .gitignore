@@ -24,4 +24,7 @@ docker-compose.override.yml
 /cleanuparr/*
 !/cleanuparr/blacklist.json
 !/cleanuparr/logs/.gitkeep
-/rclone/rclone.conf
+/rclone/*
+!/rclone/docker-compose.yml
+/portainer/*
+!/portainer/docker-compose.yml
