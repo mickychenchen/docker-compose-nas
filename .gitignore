@@ -12,8 +12,7 @@ docker-compose.override.yml
 /bazarr
 /huntarr
 /qbittorrent
-/pia
-/pia-shared
+/gluetun
 /letsencrypt
 /jellyseerr
 /adguardhome/certs
