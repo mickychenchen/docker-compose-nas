@@ -1,5 +1,7 @@
 # Docker Compose NAS
 
+**[繁體中文](README_zh.md)** | English
+
 After searching for the perfect NAS solution, I realized what I wanted could be achieved
 with some Docker containers on a vanilla Linux box. The result is an opinionated Docker Compose configuration capable of
 browsing indexers to retrieve media resources and downloading them through a WireGuard VPN with port forwarding.
@@ -97,6 +99,30 @@ Optional containers are not enabled by default, they need to be enabled,
 see [Optional Services](#optional-services) for more information.
 
 ## Quick Start
+
+### Option 1: One-Click Automated Installer (Recommended for Beginners & Oracle Cloud VPS)
+
+Run the interactive setup wizard on a fresh Linux server (Ubuntu, Debian, Oracle Linux, RHEL, CentOS):
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+This script will automatically:
+- Check and install Docker & Docker Compose V2 if missing
+- Automatically open OS firewall ports (HTTP 80 / HTTPS 443) for Oracle Cloud (OCI) & firewalld/iptables
+- Interactively integrate **Tailscale** for secure remote access without opening public ports
+- Interactively configure **Traefik + Cloudflare SSL (DNS01 Challenge)** & subdomains
+- Interactively configure `.env` (IP/Domain, timezone, user IDs, media directories, optional profiles)
+- Create data directories with correct ownership (`DATA_ROOT`, `DOWNLOAD_ROOT`, `CONFIG_ROOT`)
+- Start all containers (`docker compose up -d`)
+- Automatically populate API keys into `.env` via `./update-config.sh`
+- Display a summary dashboard with Tailscale IP and service links
+
+---
+
+### Option 2: Manual Setup
 
 `cp .env.example .env`, edit to your needs then `docker compose up -d`.
 
