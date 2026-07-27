@@ -55,6 +55,24 @@ set_env_var() {
     fi
 }
 
+sync_vpn_file() {
+    local file="${1:-.env}"
+    local current_profiles=$(grep "^COMPOSE_PROFILES=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+    local current_cf=$(grep "^COMPOSE_FILE=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+
+    if [[ "$current_profiles" =~ "vpn" ]]; then
+        if [[ -n "$current_cf" && ! "$current_cf" =~ "vpn/docker-compose.yml" ]]; then
+            local new_cf=$(echo "$current_cf" | sed 's/docker-compose.yml/docker-compose.yml:vpn\/docker-compose.yml/')
+            set_env_var "COMPOSE_FILE" "$new_cf" "$file"
+        fi
+    else
+        if [[ "$current_cf" =~ "vpn/docker-compose.yml" ]]; then
+            local new_cf=$(echo "$current_cf" | sed 's/:vpn\/docker-compose.yml//g' | sed 's/vpn\/docker-compose.yml://g' | sed 's/vpn\/docker-compose.yml//g')
+            set_env_var "COMPOSE_FILE" "$new_cf" "$file"
+        fi
+    fi
+}
+
 # 1. 檢查權限與基本用戶
 check_user() {
     REAL_USER="${SUDO_USER:-$USER}"
@@ -232,21 +250,39 @@ configure_env() {
     DETECTED_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || hostname -I 2>/dev/null | awk '{print $1}')
     DETECTED_IP=${DETECTED_IP:-"localhost"}
 
-    if [ -f /etc/timezone ]; then
-        DETECTED_TZ=$(cat /etc/timezone)
-    elif command -v timedatectl &>/dev/null; then
-        DETECTED_TZ=$(timedatectl show --property=Timezone --value 2>/dev/null)
+    # 自動感應主機域名或回退至 IP
+    DETECTED_DOMAIN=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "")
+    if [[ -z "$DETECTED_DOMAIN" ]] || [[ "$DETECTED_DOMAIN" == "localhost"* ]]; then
+        DETECTED_DOMAIN="$DETECTED_IP"
+    fi
+
+    # 優先嘗試透過 GeoIP 自動檢測實體所在地時區 (例如 Australia/Sydney)
+    DETECTED_TZ=""
+    GEO_TZ=$(curl -s --max-time 2 http://ip-api.com/line/?fields=timezone 2>/dev/null || curl -s --max-time 2 https://ipapi.co/timezone 2>/dev/null || true)
+    if [ -n "$GEO_TZ" ] && [[ "$GEO_TZ" =~ ^[A-Za-z0-9_]+/[A-Za-z0-9_]+$ ]]; then
+        DETECTED_TZ="$GEO_TZ"
+    fi
+
+    # 若 GeoIP 未能取得或為空，嘗試從系統設定讀取
+    if [ -z "$DETECTED_TZ" ]; then
+        if [ -f /etc/timezone ]; then
+            DETECTED_TZ=$(cat /etc/timezone 2>/dev/null)
+        elif command -v timedatectl &>/dev/null; then
+            DETECTED_TZ=$(timedatectl show --property=Timezone --value 2>/dev/null)
+        elif [ -L /etc/localtime ]; then
+            DETECTED_TZ=$(readlink -f /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+        fi
     fi
     DETECTED_TZ=${DETECTED_TZ:-"Asia/Taipei"}
 
     echo ""
     echo -e "${CYAN}--- 步驟 1/5: 基本系統設定 ---${NC}"
     
-    echo -n -e "請輸入主機 IP 位址或域名 (預設: ${GREEN}${DETECTED_IP}${NC}): "
+    echo -n -e "請輸入主機基礎域名 BASE_HOSTNAME (例如 domin.com): "
     read -r user_hostname
-    user_hostname=${user_hostname:-$DETECTED_IP}
+    user_hostname=${user_hostname:-$DETECTED_DOMAIN}
 
-    echo -n -e "請輸入時區 Timezone (預設: ${GREEN}${DETECTED_TZ}${NC}): "
+    echo -n -e "請輸入時區 Timezone (預設: ${GREEN}${DETECTED_TZ}${NC}，如不變請直接按 Enter): "
     read -r user_tz
     user_tz=${user_tz:-$DETECTED_TZ}
 
@@ -256,12 +292,21 @@ configure_env() {
     set_env_var "USER_ID" "$REAL_UID"
     set_env_var "GROUP_ID" "$REAL_GID"
 
+    # 設定預設儲存根目錄 (針對小白用戶，預設使用 /home/ubuntu/data)
+    if [ -d "/home/${REAL_USER}" ]; then
+        DEFAULT_DATA_ROOT="/home/${REAL_USER}/data"
+    elif [ -d "/home/ubuntu" ]; then
+        DEFAULT_DATA_ROOT="/home/ubuntu/data"
+    else
+        DEFAULT_DATA_ROOT="/root/data"
+    fi
+
     echo ""
     echo -e "${CYAN}--- 步驟 2/5: 儲存目錄設定 ---${NC}"
-    echo -e "預設媒體與下載數據根目錄為 /mnt/data"
-    echo -n -e "請輸入資料儲存根目錄 DATA_ROOT (預設: ${GREEN}/mnt/data${NC}): "
+    echo -e "預設媒體與下載數據根目錄為 ${DEFAULT_DATA_ROOT}"
+    echo -n -e "請輸入資料儲存根目錄 DATA_ROOT (預設: ${GREEN}${DEFAULT_DATA_ROOT}${NC}，如不變請直接按 Enter): "
     read -r user_data_root
-    user_data_root=${user_data_root:-"/mnt/data"}
+    user_data_root=${user_data_root:-$DEFAULT_DATA_ROOT}
 
     user_download_root="${user_data_root}/torrents"
     user_immich_root="${user_data_root}/photos"
@@ -273,13 +318,19 @@ configure_env() {
 
     echo ""
     echo -e "${CYAN}--- 步驟 3/5: Traefik 網域與 SSL 憑證 (Cloudflare DNS Challenge) ---${NC}"
-    echo -e "若您擁有自己的域名 (如 nas.yourdomain.com)，Traefik 可為您自動申請免費 SSL 憑證。"
+    echo -e "若您擁有自己的域名 (如 micky.eu.org)，Traefik 可為您自動申請免費 SSL 憑證。"
     echo -n -e "是否要配置 SSL 憑證與 Cloudflare DNS01 Challenge？[y/N]: "
     read -r enable_ssl
     if [[ "$enable_ssl" =~ ^[Yy]$ ]]; then
-        echo -n -e "請輸入您的 NAS 完整域名 (例如 ${GREEN}nas.yourdomain.com${NC}): "
+        echo ""
+        echo -e "${YELLOW}💡 提示：請前往 Cloudflare 申請 API Token: https://dash.cloudflare.com/profile/api-tokens${NC}"
+        echo -e "${YELLOW}   設定自訂 Token 權限：Zone -> DNS -> Edit 以及 Zone -> Zone -> Read (資源範圍選擇 All zones)${NC}"
+        echo ""
+        echo -n -e "請輸入主機基礎域名 BASE_HOSTNAME (預設: ${GREEN}${user_hostname}${NC}，如不變請直接按 Enter): "
         read -r user_domain
         user_domain=${user_domain:-$user_hostname}
+        # 自動剝離使用者可能誤輸入的 nas. 前綴，避免組成 nas.nas.domain.com
+        user_domain=$(echo "$user_domain" | sed -E 's/^nas\.//i')
 
         echo -n -e "請輸入 Let's Encrypt 通知 Email: "
         read -r user_le_email
@@ -287,7 +338,7 @@ configure_env() {
         read -r user_cf_email
         echo -n -e "請輸入 Cloudflare DNS API Token (需具備 DNS:Edit 權限): "
         read -r user_cf_dns_token
-        echo -n -e "請輸入 Cloudflare Zone API Token (需具備 Zone:Read 權限): "
+        echo -n -e "請輸入 Cloudflare Zone API Token (需具備 Zone:Read 權限，若使用同一個 Token 可直接貼上): "
         read -r user_cf_zone_token
 
         set_env_var "BASE_HOSTNAME" "$user_domain"
@@ -314,7 +365,6 @@ configure_env() {
     echo -e "本專案可選用 PIA VPN 保護 qBittorrent BT 下載。"
     echo -n -e "您是否有 Private Internet Access (PIA) VPN 帳號？[y/N]: "
     read -r has_pia
-    CURRENT_CF=$(grep "^COMPOSE_FILE=" .env | cut -d'=' -f2- | tr -d '"')
     if [[ "$has_pia" =~ ^[Yy]$ ]]; then
         echo -n -e "請輸入 PIA 用戶名 (PIA Username): "
         read -r pia_user
@@ -328,18 +378,25 @@ configure_env() {
         set_env_var "PIA_PASS" "$pia_pass"
         set_env_var "PIA_LOCATION" "$pia_loc"
 
-        if [[ ! "$CURRENT_CF" =~ "vpn/docker-compose.yml" ]]; then
-            NEW_CF=$(echo "$CURRENT_CF" | sed 's/docker-compose.yml/docker-compose.yml:vpn\/docker-compose.yml/')
-            set_env_var "COMPOSE_FILE" "$NEW_CF"
+        CURRENT_PROFILES=$(grep "^COMPOSE_PROFILES=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+        if [[ ! "$CURRENT_PROFILES" =~ "vpn" ]]; then
+            if [ -n "$CURRENT_PROFILES" ]; then
+                set_env_var "COMPOSE_PROFILES" "${CURRENT_PROFILES},vpn"
+            else
+                set_env_var "COMPOSE_PROFILES" "vpn"
+            fi
         fi
-        log_success "已啟用 PIA WireGuard VPN，qBittorrent 將經由 VPN 加密下載。"
+        sync_vpn_file
+        log_success "已啟用 PIA WireGuard VPN (COMPOSE_PROFILES 包含 vpn)，qBittorrent 將經由 VPN 加密下載。"
     else
         set_env_var "PIA_USER" ""
         set_env_var "PIA_PASS" ""
 
-        NEW_CF=$(echo "$CURRENT_CF" | sed 's/:vpn\/docker-compose.yml//g' | sed 's/vpn\/docker-compose.yml://g' | sed 's/vpn\/docker-compose.yml//g')
-        set_env_var "COMPOSE_FILE" "$NEW_CF"
-        log_info "未啟用 PIA VPN：因 BT 下載具隱私風險，已先暫停啟動 VPN 與 qBittorrent。日後於 .env 填入 PIA 帳密並加入 vpn/docker-compose.yml 即可啟動！"
+        CURRENT_PROFILES=$(grep "^COMPOSE_PROFILES=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+        NEW_PROFILES=$(echo "$CURRENT_PROFILES" | sed -E 's/(^|,)vpn($|,)/\1\2/g' | sed -E 's/^,|,$//g' | sed 's/,,/,/g')
+        set_env_var "COMPOSE_PROFILES" "$NEW_PROFILES"
+        sync_vpn_file
+        log_info "未啟用 PIA VPN：qBittorrent 將直接運行。日後欲啟用，只需於 .env 在 COMPOSE_PROFILES 加入 vpn 即可！"
     fi
 
     echo ""
@@ -365,13 +422,14 @@ configure_env() {
         echo "13) Cross-Seed (自動跨站補種)"
         echo "14) Autobrr (自動搶種)"
         echo "15) Suggestarr (媒體建議推薦)"
-        echo "16) 全部啟用 (All)"
+        echo "16) PIA VPN (WireGuard 加密 BT 下載)"
+        echo "17) 全部啟用 (All)"
         echo -n -e "請選擇數字 [預設不加選]: "
         read -r profile_choices
 
         SELECTED_PROFILES=()
-        if [ "$profile_choices" = "16" ] || [ "$profile_choices" = "all" ]; then
-            SELECTED_PROFILES=("immich" "homeassistant" "adguardhome" "vaultwarden" "paperless" "flaresolverr" "tandoor" "joplin" "calibre-web" "lidarr" "sabnzbd" "cleanuparr" "cross-seed" "autobrr" "suggestarr")
+        if [ "$profile_choices" = "17" ] || [ "$profile_choices" = "all" ]; then
+            SELECTED_PROFILES=("immich" "homeassistant" "adguardhome" "vaultwarden" "paperless" "flaresolverr" "tandoor" "joplin" "calibre-web" "lidarr" "sabnzbd" "cleanuparr" "cross-seed" "autobrr" "suggestarr" "vpn")
         else
             IFS=',' read -ra ADDR <<< "$profile_choices"
             for choice in "${ADDR[@]}"; do
@@ -392,6 +450,7 @@ configure_env() {
                     13) SELECTED_PROFILES+=("cross-seed") ;;
                     14) SELECTED_PROFILES+=("autobrr") ;;
                     15) SELECTED_PROFILES+=("suggestarr") ;;
+                    16) SELECTED_PROFILES+=("vpn") ;;
                 esac
             done
         fi
@@ -410,9 +469,12 @@ configure_env() {
             sudo systemctl restart systemd-resolved 2>/dev/null || true
         fi
     else
-        set_env_var "COMPOSE_PROFILES" ""
+        # 保持步驟 4 可能已設定的 vpn 狀態，若未設定則為空
+        HAS_VPN=$(grep "^COMPOSE_PROFILES=" .env 2>/dev/null | grep -q "vpn" && echo "vpn" || echo "")
+        set_env_var "COMPOSE_PROFILES" "$HAS_VPN"
     fi
 
+    sync_vpn_file
     log_success ".env 設定嚮導完成！"
 }
 
@@ -465,8 +527,19 @@ start_services() {
 
 # 9. 安裝完成儀表板展示
 show_completion() {
-    SERVER_IP=$(grep "^HOSTNAME=" .env | cut -d'=' -f2- | tr -d '"')
+    BASE_HOST=$(grep "^BASE_HOSTNAME=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+    RAW_HOSTNAME=$(grep "^HOSTNAME=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+    RAW_SEERR=$(grep "^SEERR_HOSTNAME=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+
+    if [ -n "$BASE_HOST" ]; then
+        SERVER_IP=$(echo "$RAW_HOSTNAME" | sed "s/\${BASE_HOSTNAME}/$BASE_HOST/g")
+        SEERR_DOMAIN=$(echo "$RAW_SEERR" | sed "s/\${BASE_HOSTNAME}/$BASE_HOST/g")
+    else
+        SERVER_IP=${RAW_HOSTNAME:-"localhost"}
+        SEERR_DOMAIN=${RAW_SEERR:-"seerr.localhost"}
+    fi
     SERVER_IP=${SERVER_IP:-"localhost"}
+    SEERR_DOMAIN=${SEERR_DOMAIN:-"seerr.${SERVER_IP}"}
     TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
 
     echo ""
@@ -486,7 +559,7 @@ show_completion() {
     echo -e "  🔍 索引聚合 (Prowlarr) : ${YELLOW}http://${SERVER_IP}/prowlarr${NC}"
     echo -e "  ⬇️  BT 下載器 (qBittorrent): ${YELLOW}http://${SERVER_IP}/qbittorrent${NC}"
     echo -e "      └ (帳號: ${GREEN}admin${NC} / 預設密碼: ${GREEN}adminadmin${NC})"
-    echo -e "  🍿 點片系統 (Seerr)    : ${YELLOW}http://${SERVER_IP}/seerr${NC}"
+    echo -e "  🍿 點片系統 (Seerr)    : ${YELLOW}http://${SEERR_DOMAIN}/${NC}"
     echo ""
     echo -e "${CYAN}💡 Tailscale & 網域解析說明：${NC}"
     echo -e "  • 若使用 Tailscale 異地連線，建議在 Cloudflare 將 ${YELLOW}${SERVER_IP}${NC} 的 A 紀錄指向 ${GREEN}${TS_IP:-"您的 Tailscale IP"}${NC}"

@@ -29,6 +29,7 @@
   - [Homepage 總儀表板](#homepage-總儀表板)
   - [Seerr 點片系統](#seerr-點片系統)
   - [Traefik 逆向代理與 SSL 免費憑證](#traefik-逆向代理與-ssl-免費憑證)
+    - [Cloudflare API Token 申請圖文教學](#cloudflare-api-token-申請圖文教學)
     - [透過 Tailscale 實現安全異地連線](#透過-tailscale-實現安全異地連線)
   - [選配擴充服務 (Optional Services)](#選配擴充服務-optional-services)
 
@@ -156,9 +157,45 @@ data
 Traefik 預設監聽 80 與 443 埠，透過 Cloudflare DNS01 Challenge 自動向 Let's Encrypt 申請 SSL 免費憑證。
 
 若您使用 Cloudflare 管理域名：
-1. 將 Cloudflare API Token 填入 `.env` 的 `CLOUDFLARE_DNS_API_TOKEN` 與 `CLOUDFLARE_ZONE_API_TOKEN`。
+1. 將 Cloudflare API Token 填入 `.env` 的 `CLOUDFLARE_DNS_API_TOKEN` 與 `CLOUDFLARE_ZONE_API_TOKEN`（可參考下方圖文教學申請）。
 2. 將 DNS `A` 紀錄指向主機公網 IP 或 Tailscale IP。
 3. Traefik 將自動全自動獲取並更新 HTTPS 證書。
+
+---
+
+### Cloudflare API Token 申請圖文教學
+
+若要使用 Cloudflare 進行 Traefik 的 SSL DNS01 Challenge 憑證申請，請前往 [Cloudflare API Tokens 頁面](https://dash.cloudflare.com/profile/api-tokens) 建立 API Token：
+
+#### 步驟 1：建立 Token
+登入 Cloudflare 後進入 [User API Tokens](https://dash.cloudflare.com/profile/api-tokens) 頁面，點擊右上角的 **+ Create Token** 藍色按鈕。
+
+![步驟 1：點擊 Create Token](docs/images/cf_token_step1.jpg)
+
+#### 步驟 2：選擇建立自訂 Token
+在 **Custom token** 項目旁，點擊 **Get started** 按鈕開始建立自訂 Token。
+
+![步驟 2：選擇 Create Custom Token](docs/images/cf_token_step2.jpg)
+
+#### 步驟 3：設定名稱與權限範圍
+- **Token name**：填入識別名稱（如 `CF API`）。
+- **Permissions**：新增以下兩項權限：
+  - `Zone` | `DNS` | `Edit`
+  - `Zone` | `Zone` | `Read`
+- **Zone Resources**：選擇 `Include` | `All zones`（套用至所有網域）。
+設定完成後，點擊最下方的 **Continue to summary** 藍色按鈕。
+
+![步驟 3：設定權限與資源](docs/images/cf_token_step3.jpg)
+
+#### 步驟 4：確認摘要並建立
+確認權限摘要顯示為 `All zones - DNS:Edit, Zone:Read`，無誤後點擊 **Create Token** 藍色按鈕。
+
+![步驟 4：確認摘要並建立 Token](docs/images/cf_token_step4.jpg)
+
+#### 步驟 5：複製 API Token
+建立成功後，複製產生的 API Token，並貼入 `.env` 設定檔中的 `CLOUDFLARE_DNS_API_TOKEN` 與 `CLOUDFLARE_ZONE_API_TOKEN`（或於 `./install.sh` 安裝嚮導中輸入）。
+
+![步驟 5：複製 API Token](docs/images/cf_token_step5.jpg)
 
 ---
 

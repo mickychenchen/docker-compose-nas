@@ -32,6 +32,7 @@ I am running it in Ubuntu Server 22.04; I also tested this setup on a [Synology 
   - [Homepage](#homepage)
   - [Seerr](#seerr)
   - [Traefik and SSL Certificates](#traefik-and-ssl-certificates)
+    - [How to Obtain Cloudflare API Token](#how-to-obtain-cloudflare-api-token)
     - [Accessing from the outside with Tailscale](#accessing-from-the-outside-with-tailscale)
   - [Optional Services](#optional-services)
     - [FlareSolverr](#flaresolverr)
@@ -329,7 +330,41 @@ Given the NAS is not accessible from the internet, we need to do a dnsChallenge.
 Here we will be using CloudFlare, but the mechanism will be the same for all DNS providers
 baring environment variable changes, see the Traefik documentation above and [Lego's documentation](https://go-acme.github.io/lego/dns).
 
-Then, fill the CloudFlare `.env` entries.
+Then, fill the CloudFlare `.env` entries (`CLOUDFLARE_DNS_API_TOKEN` and `CLOUDFLARE_ZONE_API_TOKEN`).
+
+### How to Obtain Cloudflare API Token
+
+To obtain a Cloudflare API Token for Traefik's SSL DNS01 Challenge, go to the [Cloudflare API Tokens Page](https://dash.cloudflare.com/profile/api-tokens) and follow these steps:
+
+#### Step 1: Create Token
+Log into Cloudflare and navigate to [User API Tokens](https://dash.cloudflare.com/profile/api-tokens). Click on the **+ Create Token** button.
+
+![Step 1: Click Create Token](docs/images/cf_token_step1.jpg)
+
+#### Step 2: Select Custom Token
+Under **Custom token**, click **Get started**.
+
+![Step 2: Select Create Custom Token](docs/images/cf_token_step2.jpg)
+
+#### Step 3: Configure Token Name & Permissions
+- **Token name**: Provide a descriptive name (e.g. `CF API`).
+- **Permissions**: Add the following two permissions:
+  - `Zone` | `DNS` | `Edit`
+  - `Zone` | `Zone` | `Read`
+- **Zone Resources**: Select `Include` | `All zones`.
+After configuring, click **Continue to summary**.
+
+![Step 3: Set Permissions and Resources](docs/images/cf_token_step3.jpg)
+
+#### Step 4: Summary & Create Token
+Verify that the permissions summary displays `All zones - DNS:Edit, Zone:Read`, then click **Create Token**.
+
+![Step 4: Confirm Summary and Create Token](docs/images/cf_token_step4.jpg)
+
+#### Step 5: Copy API Token
+Copy the generated API Token and paste it into `.env` for `CLOUDFLARE_DNS_API_TOKEN` and `CLOUDFLARE_ZONE_API_TOKEN` (or provide it when running `./install.sh`).
+
+![Step 5: Copy API Token](docs/images/cf_token_step5.jpg)
 
 If you want to test your configuration first, use the Let's Encrypt staging server by updating `LETS_ENCRYPT_CA_SERVER`'s
 value in `.env`:

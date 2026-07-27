@@ -5,6 +5,40 @@ if ! $DOCKER_CMD info &>/dev/null && command -v sudo &>/dev/null && sudo docker 
     DOCKER_CMD="sudo docker"
 fi
 
+set_env_var() {
+    local key="$1"
+    local val="$2"
+    local file="${3:-.env}"
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        local escaped_val=$(printf '%s\n' "$val" | sed -e 's/[\/&]/\\&/g')
+        sed -i "s|^${key}=.*|${key}=${escaped_val}|" "$file"
+    else
+        echo "${key}=${val}" >> "$file"
+    fi
+}
+
+sync_vpn_file() {
+    local file="${1:-.env}"
+    local current_profiles=$(grep "^COMPOSE_PROFILES=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+    local current_cf=$(grep "^COMPOSE_FILE=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+
+    if [[ "$current_profiles" =~ "vpn" ]]; then
+        if [[ -n "$current_cf" && ! "$current_cf" =~ "vpn/docker-compose.yml" ]]; then
+            local new_cf=$(echo "$current_cf" | sed 's/docker-compose.yml/docker-compose.yml:vpn\/docker-compose.yml/')
+            set_env_var "COMPOSE_FILE" "$new_cf" "$file"
+        fi
+    else
+        if [[ "$current_cf" =~ "vpn/docker-compose.yml" ]]; then
+            local new_cf=$(echo "$current_cf" | sed 's/:vpn\/docker-compose.yml//g' | sed 's/vpn\/docker-compose.yml://g' | sed 's/vpn\/docker-compose.yml//g')
+            set_env_var "COMPOSE_FILE" "$new_cf" "$file"
+        fi
+    fi
+}
+
+if [ -f .env ]; then
+    sync_vpn_file
+fi
+
 wait_for_file() {
     local file="$1"
     local timeout="${2:-30}"
@@ -90,3 +124,6 @@ for container in $($DOCKER_CMD ps --format '{{.Names}}'); do
     update_qbittorrent_config "$container"
   fi
 done
+
+echo "Reloading Docker Compose stack with updated API keys..."
+$DOCKER_CMD compose up -d
