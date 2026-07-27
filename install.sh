@@ -55,23 +55,6 @@ set_env_var() {
     fi
 }
 
-sync_vpn_file() {
-    local file="${1:-.env}"
-    local current_profiles=$(grep "^COMPOSE_PROFILES=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
-    local current_cf=$(grep "^COMPOSE_FILE=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
-
-    if [[ "$current_profiles" =~ "vpn" ]]; then
-        if [[ -n "$current_cf" && ! "$current_cf" =~ "vpn/docker-compose.yml" ]]; then
-            local new_cf=$(echo "$current_cf" | sed 's/docker-compose.yml/docker-compose.yml:vpn\/docker-compose.yml/')
-            set_env_var "COMPOSE_FILE" "$new_cf" "$file"
-        fi
-    else
-        if [[ "$current_cf" =~ "vpn/docker-compose.yml" ]]; then
-            local new_cf=$(echo "$current_cf" | sed 's/:vpn\/docker-compose.yml//g' | sed 's/vpn\/docker-compose.yml://g' | sed 's/vpn\/docker-compose.yml//g')
-            set_env_var "COMPOSE_FILE" "$new_cf" "$file"
-        fi
-    fi
-}
 
 # 1. 檢查權限與基本用戶
 check_user() {
@@ -144,33 +127,18 @@ check_oci_firewall() {
 # 4. 檢查與自動安裝 Docker & Docker Compose
 check_docker() {
     log_info "正在檢查 Docker 與 Docker Compose V2 環境..."
-    DOCKER_READY=true
     if ! command -v docker &>/dev/null; then
-        DOCKER_READY=false
-    fi
+        log_info "未檢測到 Docker 環境，正在自動下載並安裝官方 Docker 套件..."
+        curl -fsSL https://get.docker.com | sh
+        
+        log_info "啟動 Docker 服務並設定開機自啟..."
+        sudo systemctl enable --now docker 2>/dev/null || sudo service docker start 2>/dev/null || true
 
-    if [ "$DOCKER_READY" = false ]; then
-        log_warning "未找到 Docker 環境。"
-        echo -n -e "${YELLOW}是否要為您自動下載並安裝官方 Docker 套件？[Y/n]: ${NC}"
-        read -r install_docker_choice
-        install_docker_choice=${install_docker_choice:-Y}
-
-        if [[ "$install_docker_choice" =~ ^[Yy]$ ]]; then
-            log_info "開始安裝 Docker，請稍候..."
-            curl -fsSL https://get.docker.com | sh
-            
-            log_info "啟動 Docker 服務並設定開機自啟..."
-            sudo systemctl enable --now docker 2>/dev/null || sudo service docker start 2>/dev/null || true
-
-            if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
-                log_info "將使用者 ${REAL_USER} 加入 docker 用戶組..."
-                sudo usermod -aG docker "$REAL_USER" || true
-            fi
-            log_success "Docker 安裝完成！"
-        else
-            log_error "本專案必須依賴 Docker 才能運行，請安裝後重新執行腳本。"
-            exit 1
+        if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
+            log_info "將使用者 ${REAL_USER} 加入 docker 用戶組..."
+            sudo usermod -aG docker "$REAL_USER" || true
         fi
+        log_success "Docker 安裝完成！"
     fi
 
     # 自動判定調用 docker 還是 sudo docker
@@ -187,40 +155,26 @@ check_docker() {
     log_success "Docker 運作正常 (權限判定: ${DOCKER_CMD})"
 }
 
-# 5. Tailscale 異地安全內網連線整合
+# 5. Tailscale 異地安全內網連線整合 (直接自動安裝與連線)
 setup_tailscale() {
-    echo ""
-    echo -e "${CYAN}----------------------------------------------------------------${NC}"
-    log_info "Tailscale 異地安全內網連線整合"
-    echo -e "推薦用於 Oracle Cloud / 遠端 VPS 伺服器，能在不暴露公網 Port 的情況下安全遠端存取。"
-    echo -n -e "${YELLOW}是否要為本機安裝/配置 Tailscale？[Y/n]: ${NC}"
-    read -r install_ts_choice
-    install_ts_choice=${install_ts_choice:-Y}
+    log_info "正在檢查 Tailscale 異地安全內網連線環境..."
+    if ! command -v tailscale &>/dev/null; then
+        log_info "正在自動下載並安裝 Tailscale 官方套件..."
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo systemctl enable --now tailscaled 2>/dev/null || sudo service tailscaled start 2>/dev/null || true
+        log_success "Tailscale 安裝完成！"
+    else
+        log_success "系統已安裝 Tailscale！"
+    fi
 
-    if [[ "$install_ts_choice" =~ ^[Yy]$ ]]; then
-        if ! command -v tailscale &>/dev/null; then
-            log_info "正在下載並安裝 Tailscale 官方套件..."
-            curl -fsSL https://tailscale.com/install.sh | sh
-            sudo systemctl enable --now tailscaled 2>/dev/null || sudo service tailscaled start 2>/dev/null || true
-            log_success "Tailscale 安裝完成！"
-        else
-            log_success "系統已安裝 Tailscale！"
-        fi
-
-        # 檢測連線狀態
+    # 檢測連線狀態
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
+    if [ -n "$TAILSCALE_IP" ]; then
+        log_success "Tailscale 連線正常，您的 Tailscale IP 為: ${GREEN}${TAILSCALE_IP}${NC}"
+    else
+        log_info "正在自動啟動 Tailscale 登入綁定 (請點擊終端顯示的網址完成登入)..."
+        sudo tailscale up || log_warning "Tailscale 登入已跳過，您稍後可隨時手動執行 sudo tailscale up"
         TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
-        if [ -n "$TAILSCALE_IP" ]; then
-            log_success "Tailscale 連線正常，您的 Tailscale IP 為: ${GREEN}${TAILSCALE_IP}${NC}"
-        else
-            log_warning "Tailscale 服務運作中，但尚未進行帳號登入/綁定 (sudo tailscale up)。"
-            echo -n -e "${YELLOW}是否要現在執行 'sudo tailscale up' 進行登入綁定？[Y/n]: ${NC}"
-            read -r ts_up_now
-            ts_up_now=${ts_up_now:-Y}
-            if [[ "$ts_up_now" =~ ^[Yy]$ ]]; then
-                sudo tailscale up || log_warning "Tailscale 登入已跳過，您稍後可隨時手動執行 sudo tailscale up"
-                TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
-            fi
-        fi
     fi
 }
 
@@ -256,14 +210,13 @@ configure_env() {
         DETECTED_DOMAIN="$DETECTED_IP"
     fi
 
-    # 優先嘗試透過 GeoIP 自動檢測實體所在地時區 (例如 Australia/Sydney)
+    # 優先嘗試透過 GeoIP 自動檢測實體所在地時區
     DETECTED_TZ=""
     GEO_TZ=$(curl -s --max-time 2 http://ip-api.com/line/?fields=timezone 2>/dev/null || curl -s --max-time 2 https://ipapi.co/timezone 2>/dev/null || true)
     if [ -n "$GEO_TZ" ] && [[ "$GEO_TZ" =~ ^[A-Za-z0-9_]+/[A-Za-z0-9_]+$ ]]; then
         DETECTED_TZ="$GEO_TZ"
     fi
 
-    # 若 GeoIP 未能取得或為空，嘗試從系統設定讀取
     if [ -z "$DETECTED_TZ" ]; then
         if [ -f /etc/timezone ]; then
             DETECTED_TZ=$(cat /etc/timezone 2>/dev/null)
@@ -275,24 +228,7 @@ configure_env() {
     fi
     DETECTED_TZ=${DETECTED_TZ:-"Asia/Taipei"}
 
-    echo ""
-    echo -e "${CYAN}--- 步驟 1/5: 基本系統設定 ---${NC}"
-    
-    echo -n -e "請輸入主機基礎域名 BASE_HOSTNAME (例如 domin.com): "
-    read -r user_hostname
-    user_hostname=${user_hostname:-$DETECTED_DOMAIN}
-
-    echo -n -e "請輸入時區 Timezone (預設: ${GREEN}${DETECTED_TZ}${NC}，如不變請直接按 Enter): "
-    read -r user_tz
-    user_tz=${user_tz:-$DETECTED_TZ}
-
-    set_env_var "BASE_HOSTNAME" "$user_hostname"
-    set_env_var "HOSTNAME" 'nas.${BASE_HOSTNAME}'
-    set_env_var "TIMEZONE" "$user_tz"
-    set_env_var "USER_ID" "$REAL_UID"
-    set_env_var "GROUP_ID" "$REAL_GID"
-
-    # 設定預設儲存根目錄 (針對小白用戶，預設使用 /home/ubuntu/data)
+    # 自動選擇預設數據目錄
     if [ -d "/home/${REAL_USER}" ]; then
         DEFAULT_DATA_ROOT="/home/${REAL_USER}/data"
     elif [ -d "/home/ubuntu" ]; then
@@ -302,44 +238,38 @@ configure_env() {
     fi
 
     echo ""
-    echo -e "${CYAN}--- 步驟 2/5: 儲存目錄設定 ---${NC}"
-    echo -e "預設媒體與下載數據根目錄為 ${DEFAULT_DATA_ROOT}"
-    echo -n -e "請輸入資料儲存根目錄 DATA_ROOT (預設: ${GREEN}${DEFAULT_DATA_ROOT}${NC}，如不變請直接按 Enter): "
-    read -r user_data_root
-    user_data_root=${user_data_root:-$DEFAULT_DATA_ROOT}
+    echo -e "${CYAN}--- 步驟 1/4: 基本域名設定 ---${NC}"
+    echo -n -e "請輸入主機基礎域名或 IP [預設: ${GREEN}${DETECTED_DOMAIN}${NC}]: "
+    read -r user_hostname
+    user_hostname=${user_hostname:-$DETECTED_DOMAIN}
 
-    user_download_root="${user_data_root}/torrents"
-    user_immich_root="${user_data_root}/photos"
-
-    set_env_var "DATA_ROOT" "$user_data_root"
-    set_env_var "DOWNLOAD_ROOT" "$user_download_root"
-    set_env_var "IMMICH_UPLOAD_LOCATION" "$user_immich_root"
+    set_env_var "BASE_HOSTNAME" "$user_hostname"
+    set_env_var "HOSTNAME" 'nas.${BASE_HOSTNAME}'
+    set_env_var "TIMEZONE" "$DETECTED_TZ"
+    set_env_var "USER_ID" "$REAL_UID"
+    set_env_var "GROUP_ID" "$REAL_GID"
+    set_env_var "DATA_ROOT" "$DEFAULT_DATA_ROOT"
+    set_env_var "DOWNLOAD_ROOT" "${DEFAULT_DATA_ROOT}/torrents"
+    set_env_var "IMMICH_UPLOAD_LOCATION" "${DEFAULT_DATA_ROOT}/photos"
     set_env_var "CONFIG_ROOT" "."
 
     echo ""
-    echo -e "${CYAN}--- 步驟 3/5: Traefik 網域與 SSL 憑證 (Cloudflare DNS Challenge) ---${NC}"
-    echo -e "若您擁有自己的域名 (如 micky.eu.org)，Traefik 可為您自動申請免費 SSL 憑證。"
-    echo -n -e "是否要配置 SSL 憑證與 Cloudflare DNS01 Challenge？[y/N]: "
+    echo -e "${CYAN}--- 步驟 2/4: Traefik 網域與 SSL 憑證 (Cloudflare DNS Challenge) ---${NC}"
+    echo -n -e "是否要配置 SSL 憑證與 Cloudflare DNS 自動憑證？[y/N]: "
     read -r enable_ssl
     if [[ "$enable_ssl" =~ ^[Yy]$ ]]; then
-        echo ""
         echo -e "${YELLOW}💡 提示：請前往 Cloudflare 申請 API Token: https://dash.cloudflare.com/profile/api-tokens${NC}"
-        echo -e "${YELLOW}   設定自訂 Token 權限：Zone -> DNS -> Edit 以及 Zone -> Zone -> Read (資源範圍選擇 All zones)${NC}"
-        echo ""
-        echo -n -e "請輸入主機基礎域名 BASE_HOSTNAME (預設: ${GREEN}${user_hostname}${NC}，如不變請直接按 Enter): "
-        read -r user_domain
-        user_domain=${user_domain:-$user_hostname}
-        # 自動剝離使用者可能誤輸入的 nas. 前綴，避免組成 nas.nas.domain.com
-        user_domain=$(echo "$user_domain" | sed -E 's/^nas\.//i')
-
         echo -n -e "請輸入 Let's Encrypt 通知 Email: "
         read -r user_le_email
         echo -n -e "請輸入 Cloudflare 帳號 Email: "
         read -r user_cf_email
-        echo -n -e "請輸入 Cloudflare DNS API Token (需具備 DNS:Edit 權限): "
+        echo -n -e "請輸入 Cloudflare DNS API Token: "
         read -r user_cf_dns_token
-        echo -n -e "請輸入 Cloudflare Zone API Token (需具備 Zone:Read 權限，若使用同一個 Token 可直接貼上): "
+        echo -n -e "請輸入 Cloudflare Zone API Token (同上可直接 Enter): "
         read -r user_cf_zone_token
+        user_cf_zone_token=${user_cf_zone_token:-$user_cf_dns_token}
+
+        user_domain=$(echo "$user_hostname" | sed -E 's/^nas\.//i')
 
         set_env_var "BASE_HOSTNAME" "$user_domain"
         set_env_var "HOSTNAME" 'nas.${BASE_HOSTNAME}'
@@ -352,17 +282,13 @@ configure_env() {
         set_env_var "CLOUDFLARE_ZONE_API_TOKEN" "$user_cf_zone_token"
         log_success "Cloudflare SSL 自動憑證配置完畢！"
     else
-        log_info "已關閉 SSL DNS Challenge (DNS_CHALLENGE=false)，避免背景無效 ACME 報錯。"
-        set_env_var "BASE_HOSTNAME" "$user_hostname"
-        set_env_var "HOSTNAME" 'nas.${BASE_HOSTNAME}'
         set_env_var "DNS_CHALLENGE" "false"
         set_env_var "DNS_CHALLENGE_PROVIDER" "cloudflare"
         set_env_var "SEERR_HOSTNAME" 'seerr.${BASE_HOSTNAME}'
     fi
 
     echo ""
-    echo -e "${CYAN}--- 步驟 4/5: PIA WireGuard VPN 設定 ---${NC}"
-    echo -e "本專案可選用 PIA VPN 保護 qBittorrent BT 下載。"
+    echo -e "${CYAN}--- 步驟 3/4: PIA WireGuard VPN 設定 ---${NC}"
     echo -n -e "您是否有 Private Internet Access (PIA) VPN 帳號？[y/N]: "
     read -r has_pia
     if [[ "$has_pia" =~ ^[Yy]$ ]]; then
@@ -370,7 +296,7 @@ configure_env() {
         read -r pia_user
         echo -n -e "請輸入 PIA 密碼 (PIA Password): "
         read -r pia_pass
-        echo -n -e "請輸入 PIA 伺服器位置 (預設: ${GREEN}ca${NC}): "
+        echo -n -e "請輸入 PIA 伺服器位置 [預設: ${GREEN}ca${NC}]: "
         read -r pia_loc
         pia_loc=${pia_loc:-"ca"}
 
@@ -386,8 +312,7 @@ configure_env() {
                 set_env_var "COMPOSE_PROFILES" "vpn"
             fi
         fi
-        sync_vpn_file
-        log_success "已啟用 PIA WireGuard VPN (COMPOSE_PROFILES 包含 vpn)，qBittorrent 將經由 VPN 加密下載。"
+        log_success "已啟用 PIA WireGuard VPN，將同時啟動 VPN 與 qBittorrent 加密下載。"
     else
         set_env_var "PIA_USER" ""
         set_env_var "PIA_PASS" ""
@@ -395,13 +320,12 @@ configure_env() {
         CURRENT_PROFILES=$(grep "^COMPOSE_PROFILES=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"')
         NEW_PROFILES=$(echo "$CURRENT_PROFILES" | sed -E 's/(^|,)vpn($|,)/\1\2/g' | sed -E 's/^,|,$//g' | sed 's/,,/,/g')
         set_env_var "COMPOSE_PROFILES" "$NEW_PROFILES"
-        sync_vpn_file
-        log_info "未啟用 PIA VPN：qBittorrent 將直接運行。日後欲啟用，只需於 .env 在 COMPOSE_PROFILES 加入 vpn 即可！"
+        log_info "未啟用 PIA VPN：系統將關閉 VPN 與 qBittorrent 下載器。"
     fi
 
     echo ""
-    echo -e "${CYAN}--- 步驟 5/5: 選配擴充服務 (Profiles) ---${NC}"
-    echo "預設啟動基礎媒體庫：Sonarr, Radarr, Bazarr, Prowlarr, qBittorrent, Jellyfin, Homepage, Seerr"
+    echo -e "${CYAN}--- 步驟 4/4: 選配擴充服務 (Profiles) ---${NC}"
+    echo "預設啟動基礎媒體庫：Sonarr, Radarr, Bazarr, Prowlarr, Jellyfin, Homepage, Seerr"
     echo -n -e "是否要挑選並啟用其他擴充服務？[y/N]: "
     read -r enable_profiles
     if [[ "$enable_profiles" =~ ^[Yy]$ ]]; then
@@ -422,7 +346,7 @@ configure_env() {
         echo "13) Cross-Seed (自動跨站補種)"
         echo "14) Autobrr (自動搶種)"
         echo "15) Suggestarr (媒體建議推薦)"
-        echo "16) PIA VPN (WireGuard 加密 BT 下載)"
+        echo "16) PIA VPN & qBittorrent (WireGuard 加密 BT 下載器)"
         echo "17) 全部啟用 (All)"
         echo -n -e "請選擇數字 [預設不加選]: "
         read -r profile_choices
@@ -469,12 +393,10 @@ configure_env() {
             sudo systemctl restart systemd-resolved 2>/dev/null || true
         fi
     else
-        # 保持步驟 4 可能已設定的 vpn 狀態，若未設定則為空
         HAS_VPN=$(grep "^COMPOSE_PROFILES=" .env 2>/dev/null | grep -q "vpn" && echo "vpn" || echo "")
         set_env_var "COMPOSE_PROFILES" "$HAS_VPN"
     fi
 
-    sync_vpn_file
     log_success ".env 設定嚮導完成！"
 }
 

@@ -125,8 +125,8 @@ chmod +x install.sh
 
 本專案支援將 qBittorrent 的所有下載流量透過 [PIA WireGuard VPN](https://github.com/thrnz/docker-wireguard-pia) 進行加密與 Port Forwarding 轉發。
 
-- 若要啟用 VPN 保護，請在安裝腳本中選擇啟用 PIA，或在 `COMPOSE_FILE` 中引入 `:vpn/docker-compose.yml` 並填寫 `PIA_USER` 與 `PIA_PASS`。
-- 若無 PIA VPN 帳號，請維持不寫入 `vpn/docker-compose.yml`，系統將安全地暫停啟動 `vpn` 與 `qbittorrent`，避免未加密下載或連線失敗。
+- 若要啟用 VPN 保護與 qBittorrent 下載器，請在安裝腳本中選擇啟用 PIA，或在 `COMPOSE_PROFILES` 加入 `vpn` 並填寫 `PIA_USER` 與 `PIA_PASS`。
+- 若未啟用 VPN（`COMPOSE_PROFILES` 未包含 `vpn`），系統將安全地停用 `vpn` 與 `qbittorrent`，避免未加密裸連或下載暴露風險。
 
 ---
 
